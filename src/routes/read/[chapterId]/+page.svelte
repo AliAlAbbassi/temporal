@@ -15,11 +15,15 @@
 	const nextChapterId = $derived(data.nextChapterId);
 
 	// Build proxied image URLs
+	// MangaDex returns { baseUrl, hash, pages } — we construct proxy URLs
+	// MangaPill returns { pages } — already full proxy URLs
 	const pages = $derived(
-		pageData.pages.map(
-			(filename: string) =>
-				`/api/proxy/page/${pageData.hash}/${filename}?base=${encodeURIComponent(pageData.baseUrl)}&q=data`
-		)
+		pageData.hash
+			? pageData.pages.map(
+					(filename: string) =>
+						`/api/proxy/page/${pageData.hash}/${filename}?base=${encodeURIComponent(pageData.baseUrl)}&q=data`,
+				)
+			: pageData.pages,
 	);
 
 	const totalPages = $derived(pages.length);

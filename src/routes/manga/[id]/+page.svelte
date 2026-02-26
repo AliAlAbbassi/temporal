@@ -35,12 +35,30 @@
 	function continueReading() {
 		if (progress) {
 			goto(`/read/${progress.chapterId}?manga=${manga.id}`);
-		} else if (manga.chapters.length > 0) {
-			goto(`/read/${manga.chapters[0].id}?manga=${manga.id}`);
+			return;
+		}
+		// Find first readable (non-external) chapter, or fall back to first chapter
+		const firstReadable = manga.chapters.find((ch) => ch.pages > 0) || manga.chapters[0];
+		if (!firstReadable) return;
+
+		if (firstReadable.pages === 0 && firstReadable.externalUrl) {
+			window.open(firstReadable.externalUrl, '_blank');
+		} else {
+			goto(`/read/${firstReadable.id}?manga=${manga.id}`);
 		}
 	}
 
 	const readCount = $derived(manga.chapters.filter((ch) => readChapters.has(ch.id)).length);
+
+	let scrolled = $state(false);
+
+	$effect(() => {
+		const root = document.getElementById('app-root');
+		if (!root) return;
+		const onScroll = () => { scrolled = root.scrollTop > 20; };
+		root.addEventListener('scroll', onScroll, { passive: true });
+		return () => root.removeEventListener('scroll', onScroll);
+	});
 </script>
 
 <svelte:head>
@@ -48,6 +66,19 @@
 </svelte:head>
 
 <div class="min-h-dvh">
+	<!-- Floating back button -->
+	<button
+		onclick={() => history.back()}
+		class="fixed left-3 z-40 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white/80 backdrop-blur-sm transition-all hover:bg-black/70 hover:text-white pt-safe-top-btn"
+		class:opacity-0={scrolled}
+		class:pointer-events-none={scrolled}
+		aria-label="Go back"
+	>
+		<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+			<path d="m15 18-6-6 6-6" />
+		</svg>
+	</button>
+
 	<!-- Hero -->
 	<div class="relative">
 		{#if manga.coverUrl}
@@ -63,14 +94,6 @@
 		{/if}
 
 		<div class="relative px-4 pb-4 pt-safe-top">
-			<!-- Back button -->
-			<button onclick={() => history.back()} class="mb-4 flex items-center gap-1.5 text-sm text-text-secondary transition-colors hover:text-text">
-				<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-					<path d="m15 18-6-6 6-6" />
-				</svg>
-				Back
-			</button>
-
 			<div class="mx-auto flex max-w-3xl gap-4">
 				<!-- Cover -->
 				<div class="w-28 flex-shrink-0 sm:w-36">
@@ -88,6 +111,15 @@
 						<p class="mt-1 text-sm text-text-secondary">{manga.author}</p>
 					{/if}
 					<div class="mt-2 flex flex-wrap gap-1.5">
+						{#if manga.id.startsWith('mangapill:')}
+							<span class="rounded-md bg-emerald-600/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
+								MangaPill
+							</span>
+						{:else}
+							<span class="rounded-md bg-orange-600/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-orange-400">
+								MangaDex
+							</span>
+						{/if}
 						<span class="rounded-md bg-bg-surface px-2 py-0.5 text-[10px] uppercase tracking-wider text-text-secondary">
 							{manga.status}
 						</span>
@@ -167,8 +199,11 @@
 		<div class="flex flex-col">
 			{#each manga.chapters as chapter (chapter.id)}
 				{@const isRead = readChapters.has(chapter.id)}
+				{@const isExternal = chapter.pages === 0 && chapter.externalUrl}
 				<a
-					href="/read/{chapter.id}?manga={manga.id}"
+					href={isExternal ? chapter.externalUrl : `/read/${chapter.id}?manga=${manga.id}`}
+					target={isExternal ? '_blank' : undefined}
+					rel={isExternal ? 'noopener noreferrer' : undefined}
 					class="flex items-center gap-3 border-b border-border/50 py-3 transition-colors hover:bg-bg-hover {isRead ? 'opacity-50' : ''}"
 				>
 					<div class="flex-1 min-w-0">
@@ -181,6 +216,9 @@
 							{/if}
 						</p>
 						<p class="mt-0.5 text-[10px] text-text-muted">
+							{#if isExternal}
+								<span class="text-amber-500/80">External</span> &middot;
+							{/if}
 							{#if chapter.scanlationGroup}
 								{chapter.scanlationGroup} &middot;
 							{/if}
@@ -190,6 +228,12 @@
 					{#if isRead}
 						<svg class="h-4 w-4 flex-shrink-0 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M20 6 9 17l-5-5" />
+						</svg>
+					{:else if isExternal}
+						<svg class="h-4 w-4 flex-shrink-0 text-text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+							<polyline points="15 3 21 3 21 9" />
+							<line x1="10" y1="14" x2="21" y2="3" />
 						</svg>
 					{/if}
 				</a>
@@ -201,5 +245,9 @@
 <style>
 	.pt-safe-top {
 		padding-top: max(1rem, env(safe-area-inset-top));
+	}
+
+	.pt-safe-top-btn {
+		top: max(0.75rem, env(safe-area-inset-top));
 	}
 </style>

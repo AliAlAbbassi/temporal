@@ -10,7 +10,7 @@
 			onclick={() => goto(`/manga/${item.id}`)}
 			class="group text-left"
 		>
-			<div class="aspect-[2/3] overflow-hidden rounded-lg bg-bg-surface">
+			<div class="relative aspect-[2/3] overflow-hidden rounded-lg bg-bg-surface">
 				{#if item.coverUrl}
 					<img
 						src={item.coverUrl}
@@ -27,6 +27,9 @@
 							<path d="m21 15-5-5L5 21" />
 						</svg>
 					</div>
+				{/if}
+				{#if item.id.startsWith('mangapill:')}
+					<span class="absolute top-1 left-1 rounded bg-emerald-600/90 px-1 py-0.5 text-[8px] font-bold uppercase text-white">MP</span>
 				{/if}
 			</div>
 			<p class="mt-1.5 line-clamp-2 text-xs leading-tight text-text-secondary">{item.title}</p>

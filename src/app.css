@@ -34,7 +34,8 @@ html, body {
 
 #app-root {
 	height: 100dvh;
-	overflow: auto;
+	overflow-y: auto;
+	overflow-x: hidden;
 }
 
 /* Scrollbar styling */

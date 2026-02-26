@@ -20,6 +20,7 @@ export interface ChapterInfo {
 	pages: number;
 	publishAt: string;
 	scanlationGroup: string | null;
+	externalUrl: string | null;
 }
 
 export interface MangaDetail extends MangaSearchResult {
@@ -93,22 +94,55 @@ export async function searchManga(query: string, limit = 20, offset = 0): Promis
 	return { results, total: json.total };
 }
 
+async function fetchAllChapters(mangaId: string): Promise<any[]> {
+	const limit = 500;
+	let offset = 0;
+	let allData: any[] = [];
+
+	// First request
+	const firstRes = await fetch(
+		`${BASE}/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=0&includes[]=scanlation_group`
+	);
+	if (!firstRes.ok) throw new Error(`MangaDex feed failed: ${firstRes.status}`);
+	const firstJson = await firstRes.json();
+	allData = firstJson.data;
+	const total = firstJson.total;
+
+	// Fetch remaining pages in parallel if needed
+	if (total > limit) {
+		const remaining: Promise<Response>[] = [];
+		for (offset = limit; offset < total && offset < 10000; offset += limit) {
+			remaining.push(
+				fetch(
+					`${BASE}/manga/${mangaId}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=${limit}&offset=${offset}&includes[]=scanlation_group`
+				)
+			);
+		}
+		const responses = await Promise.all(remaining);
+		const jsons = await Promise.all(responses.map((r) => r.json()));
+		for (const json of jsons) {
+			allData = allData.concat(json.data);
+		}
+	}
+
+	return allData;
+}
+
 export async function getMangaDetail(id: string): Promise<MangaDetail> {
-	const [mangaRes, feedRes] = await Promise.all([
+	const [mangaRes, feedData] = await Promise.all([
 		fetch(`${BASE}/manga/${id}?includes[]=cover_art&includes[]=author&includes[]=artist`),
-		fetch(`${BASE}/manga/${id}/feed?translatedLanguage[]=en&order[chapter]=asc&limit=500&includes[]=scanlation_group`),
+		fetchAllChapters(id),
 	]);
 
 	if (!mangaRes.ok) throw new Error(`MangaDex manga fetch failed: ${mangaRes.status}`);
-	if (!feedRes.ok) throw new Error(`MangaDex feed fetch failed: ${feedRes.status}`);
 
-	const [mangaJson, feedJson] = await Promise.all([mangaRes.json(), feedRes.json()]);
+	const mangaJson = await mangaRes.json();
 	const manga = mangaJson.data;
 	const cover = extractRelationship(manga, 'cover_art');
 	const authorRel = extractRelationship(manga, 'author');
 	const artistRel = extractRelationship(manga, 'artist');
 
-	const chapters: ChapterInfo[] = feedJson.data.map((ch: any) => {
+	const chapters: ChapterInfo[] = feedData.map((ch: any) => {
 		const group = extractRelationship(ch, 'scanlation_group');
 		return {
 			id: ch.id,
@@ -118,18 +152,19 @@ export async function getMangaDetail(id: string): Promise<MangaDetail> {
 			pages: ch.attributes.pages || 0,
 			publishAt: ch.attributes.publishAt,
 			scanlationGroup: group?.attributes?.name || null,
+			externalUrl: ch.attributes.externalUrl || null,
 		};
 	});
 
-	// Filter out chapters with no hosted pages (external-only) and deduplicate
-	const seen = new Set<string>();
-	const dedupedChapters = chapters.filter((ch) => {
-		if (ch.pages === 0) return false;
+	// Deduplicate: prefer chapters with hosted pages over external-only
+	const seen = new Map<string, ChapterInfo>();
+	for (const ch of chapters) {
 		const key = ch.chapter ?? ch.id;
-		if (seen.has(key)) return false;
-		seen.add(key);
-		return true;
-	});
+		const existing = seen.get(key);
+		if (!existing || (existing.pages === 0 && ch.pages > 0)) {
+			seen.set(key, ch);
+		}
+	}
 
 	return {
 		id: manga.id,
@@ -146,7 +181,7 @@ export async function getMangaDetail(id: string): Promise<MangaDetail> {
 		contentRating: manga.attributes.contentRating || 'safe',
 		author: authorRel?.attributes?.name || null,
 		artist: artistRel?.attributes?.name || null,
-		chapters: dedupedChapters,
+		chapters: [...seen.values()],
 	};
 }
 

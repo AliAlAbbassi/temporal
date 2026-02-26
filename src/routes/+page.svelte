@@ -10,11 +10,32 @@
 	let continueReading = $state<ReadingProgress[]>([]);
 	let library = $state<LibraryEntry[]>([]);
 	let searchTimeout: ReturnType<typeof setTimeout>;
+	let sourceFilter = $state<'all' | 'mangadex' | 'mangapill'>('all');
 
 	$effect(() => {
 		continueReading = getAllProgress();
 		library = getLibrary();
 	});
+
+	async function doSearch(query: string, source: string) {
+		if (!query.trim()) {
+			searchResults = [];
+			isSearching = false;
+			return;
+		}
+
+		isSearching = true;
+		try {
+			const sourceParam = source !== 'all' ? `&source=${source}` : '';
+			const res = await fetch(`/api/manga/search?q=${encodeURIComponent(query)}${sourceParam}`);
+			const data = await res.json();
+			searchResults = data.results;
+		} catch {
+			searchResults = [];
+		} finally {
+			isSearching = false;
+		}
+	}
 
 	async function onSearch(query: string) {
 		searchQuery = query;
@@ -27,17 +48,14 @@
 		}
 
 		isSearching = true;
-		searchTimeout = setTimeout(async () => {
-			try {
-				const res = await fetch(`/api/manga/search?q=${encodeURIComponent(query)}`);
-				const data = await res.json();
-				searchResults = data.results;
-			} catch {
-				searchResults = [];
-			} finally {
-				isSearching = false;
-			}
-		}, 300);
+		searchTimeout = setTimeout(() => doSearch(query, sourceFilter), 300);
+	}
+
+	function setSource(source: 'all' | 'mangadex' | 'mangapill') {
+		sourceFilter = source;
+		if (searchQuery.trim()) {
+			doSearch(searchQuery, source);
+		}
 	}
 </script>
 
@@ -53,6 +71,18 @@
 	<main class="flex-1 px-4 py-4">
 		<div class="mx-auto max-w-3xl">
 			{#if searchQuery.trim()}
+				<!-- Source filter tabs -->
+				<div class="mb-4 flex gap-1.5">
+					{#each [['all', 'All'], ['mangadex', 'MangaDex'], ['mangapill', 'MangaPill']] as [value, label]}
+						<button
+							onclick={() => setSource(value as any)}
+							class="rounded-lg px-3 py-1.5 text-xs font-medium transition-colors {sourceFilter === value ? 'bg-accent text-white' : 'bg-bg-surface text-text-secondary hover:text-text'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+
 				<!-- Search results -->
 				<section>
 					{#if isSearching}

@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { getMangaDetail } from '$lib/api/mangadex';
+import { getMangaDetail } from '$lib/api/sources';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
