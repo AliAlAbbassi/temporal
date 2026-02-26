@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import {
 		getProgress,
 		getReadChapters,
+		markChapterRead,
 		isInLibrary,
 		addToLibrary,
 		removeFromLibrary,
@@ -16,12 +18,32 @@
 	let readChapters = $state<Set<string>>(new Set());
 	let progress = $state<ReturnType<typeof getProgress>>(null);
 	let showFullDesc = $state(false);
+	let sortDesc = $state(true);
+	let chapterSearch = $state('');
+	let showChapterMenu = $state(false);
 
 	$effect(() => {
 		inLibrary = isInLibrary(manga.id);
 		readChapters = getReadChapters(manga.id);
 		progress = getProgress(manga.id);
 	});
+
+	const filteredChapters = $derived(() => {
+		let chapters = [...manga.chapters];
+		if (sortDesc) chapters.reverse();
+
+		if (chapterSearch.trim()) {
+			const q = chapterSearch.trim().toLowerCase();
+			chapters = chapters.filter(
+				(ch) =>
+					ch.chapter?.toLowerCase().includes(q) ||
+					ch.title?.toLowerCase().includes(q),
+			);
+		}
+		return chapters;
+	});
+
+	const readCount = $derived(manga.chapters.filter((ch) => readChapters.has(ch.id)).length);
 
 	function toggleLibrary() {
 		if (inLibrary) {
@@ -37,7 +59,6 @@
 			goto(`/read/${progress.chapterId}?manga=${manga.id}`);
 			return;
 		}
-		// Find first readable (non-external) chapter, or fall back to first chapter
 		const firstReadable = manga.chapters.find((ch) => ch.pages > 0) || manga.chapters[0];
 		if (!firstReadable) return;
 
@@ -48,24 +69,51 @@
 		}
 	}
 
-	const readCount = $derived(manga.chapters.filter((ch) => readChapters.has(ch.id)).length);
+	function markAllRead() {
+		if (!browser) return;
+		const all = JSON.parse(localStorage.getItem('manga_read_chapters') || '{}');
+		all[manga.id] = manga.chapters.map((ch) => ch.id);
+		localStorage.setItem('manga_read_chapters', JSON.stringify(all));
+		readChapters = new Set(all[manga.id]);
+		showChapterMenu = false;
+	}
+
+	function markAllUnread() {
+		if (!browser) return;
+		const all = JSON.parse(localStorage.getItem('manga_read_chapters') || '{}');
+		delete all[manga.id];
+		localStorage.setItem('manga_read_chapters', JSON.stringify(all));
+		readChapters = new Set();
+		showChapterMenu = false;
+	}
 
 	let scrolled = $state(false);
 
 	$effect(() => {
 		const root = document.getElementById('app-root');
 		if (!root) return;
-		const onScroll = () => { scrolled = root.scrollTop > 20; };
+		const onScroll = () => {
+			scrolled = root.scrollTop > 20;
+		};
 		root.addEventListener('scroll', onScroll, { passive: true });
 		return () => root.removeEventListener('scroll', onScroll);
 	});
+
+	// Close menu on outside click
+	function handleMenuClick(e: MouseEvent) {
+		if (!(e.target as HTMLElement).closest('[data-chapter-menu]')) {
+			showChapterMenu = false;
+		}
+	}
 </script>
+
+<svelte:window onclick={handleMenuClick} />
 
 <svelte:head>
 	<title>{manga.title} — Temporal</title>
 </svelte:head>
 
-<div class="min-h-dvh">
+<div class="min-h-dvh pb-20">
 	<!-- Floating back button -->
 	<button
 		onclick={() => history.back()}
@@ -156,6 +204,7 @@
 			<button
 				onclick={toggleLibrary}
 				class="flex items-center justify-center rounded-xl px-4 ring-1 transition-colors {inLibrary ? 'bg-accent/10 text-accent ring-accent/30' : 'text-text-secondary ring-border hover:text-text'}"
+				aria-label={inLibrary ? 'Remove from library' : 'Add to library'}
 			>
 				{#if inLibrary}
 					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
@@ -194,10 +243,82 @@
 	{/if}
 
 	<!-- Chapters -->
-	<div class="mx-auto max-w-3xl px-4 pb-20 pt-4">
-		<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Chapters</h2>
+	<div class="mx-auto max-w-3xl px-4 pt-4">
+		<!-- Chapter header with controls -->
+		<div class="mb-3 flex items-center gap-2">
+			<h2 class="text-sm font-semibold uppercase tracking-wider text-text-secondary">Chapters</h2>
+			<span class="text-xs text-text-muted">({filteredChapters().length})</span>
+			<div class="flex-1"></div>
+
+			<!-- Sort toggle -->
+			<button
+				onclick={() => (sortDesc = !sortDesc)}
+				class="flex items-center gap-1 rounded-lg bg-bg-surface px-2 py-1 text-[10px] text-text-muted transition-colors hover:text-text"
+				aria-label="Toggle sort order"
+			>
+				<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					{#if sortDesc}
+						<path d="M12 5v14M5 12l7 7 7-7" />
+					{:else}
+						<path d="M12 19V5M5 12l7-7 7 7" />
+					{/if}
+				</svg>
+				{sortDesc ? 'Newest' : 'Oldest'}
+			</button>
+
+			<!-- More menu -->
+			<div class="relative" data-chapter-menu>
+				<button
+					onclick={(e) => { e.stopPropagation(); showChapterMenu = !showChapterMenu; }}
+					class="flex items-center rounded-lg bg-bg-surface p-1 text-text-muted transition-colors hover:text-text"
+					aria-label="Chapter options"
+				>
+					<svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+						<circle cx="12" cy="5" r="1.5" />
+						<circle cx="12" cy="12" r="1.5" />
+						<circle cx="12" cy="19" r="1.5" />
+					</svg>
+				</button>
+				{#if showChapterMenu}
+					<div class="absolute right-0 top-8 z-50 w-44 rounded-xl bg-bg-elevated p-1 shadow-xl ring-1 ring-border">
+						<button
+							onclick={markAllRead}
+							class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text-secondary transition-colors hover:bg-bg-hover hover:text-text"
+						>
+							<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M20 6 9 17l-5-5" />
+							</svg>
+							Mark all as read
+						</button>
+						<button
+							onclick={markAllUnread}
+							class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-text-secondary transition-colors hover:bg-bg-hover hover:text-text"
+						>
+							<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<circle cx="12" cy="12" r="10" />
+							</svg>
+							Mark all as unread
+						</button>
+					</div>
+				{/if}
+			</div>
+		</div>
+
+		<!-- Chapter search (show for long chapter lists) -->
+		{#if manga.chapters.length > 20}
+			<div class="mb-3">
+				<input
+					type="text"
+					bind:value={chapterSearch}
+					placeholder="Search chapters..."
+					class="w-full rounded-lg bg-bg-surface px-3 py-2 text-xs text-text outline-none ring-1 ring-border placeholder:text-text-muted focus:ring-accent/50"
+				/>
+			</div>
+		{/if}
+
+		<!-- Chapter list -->
 		<div class="flex flex-col">
-			{#each manga.chapters as chapter (chapter.id)}
+			{#each filteredChapters() as chapter (chapter.id)}
 				{@const isRead = readChapters.has(chapter.id)}
 				{@const isExternal = chapter.pages === 0 && chapter.externalUrl}
 				<a
@@ -206,7 +327,7 @@
 					rel={isExternal ? 'noopener noreferrer' : undefined}
 					class="flex items-center gap-3 border-b border-border/50 py-3 transition-colors hover:bg-bg-hover {isRead ? 'opacity-50' : ''}"
 				>
-					<div class="flex-1 min-w-0">
+					<div class="min-w-0 flex-1">
 						<p class="text-sm">
 							{#if chapter.chapter}
 								<span class="font-medium">Ch. {chapter.chapter}</span>

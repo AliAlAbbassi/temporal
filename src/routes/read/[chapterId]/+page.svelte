@@ -15,8 +15,6 @@
 	const nextChapterId = $derived(data.nextChapterId);
 
 	// Build proxied image URLs
-	// MangaDex returns { baseUrl, hash, pages } — we construct proxy URLs
-	// MangaPill returns { pages } — already full proxy URLs
 	const pages = $derived(
 		pageData.hash
 			? pageData.pages.map(
@@ -36,7 +34,15 @@
 	let scrollEl: HTMLDivElement;
 	let imageLoaded = $state(false);
 
-	// Load saved reading mode on mount
+	// Zoom state (paged mode)
+	let scale = $state(1);
+	let panX = $state(0);
+	let panY = $state(0);
+	let isZoomed = $derived(scale > 1.05);
+
+	// Brightness
+	let brightness = $state(100);
+
 	$effect(() => {
 		mode = getReadingMode(mangaId ?? undefined);
 	});
@@ -44,8 +50,7 @@
 	function switchMode(newMode: ReadingMode) {
 		mode = newMode;
 		setReadingMode(newMode, mangaId ?? undefined);
-
-		// When switching to scroll, scroll to current page
+		resetZoom();
 		if (newMode === 'scroll') {
 			requestAnimationFrame(() => {
 				const target = document.getElementById(`page-${currentPage}`);
@@ -54,13 +59,18 @@
 		}
 	}
 
+	function resetZoom() {
+		scale = 1;
+		panX = 0;
+		panY = 0;
+	}
+
 	// ── Paged mode logic ──
 
-	// Preload adjacent pages (paged mode)
 	$effect(() => {
 		if (mode !== 'paged') return;
 		const toPreload = [currentPage + 1, currentPage + 2, currentPage - 1].filter(
-			(i) => i >= 0 && i < totalPages
+			(i) => i >= 0 && i < totalPages,
 		);
 		for (const idx of toPreload) {
 			const img = new Image();
@@ -73,6 +83,7 @@
 		if (page < 0 || page >= totalPages) return;
 		imageLoaded = false;
 		currentPage = page;
+		resetZoom();
 	}
 
 	function nextPage() {
@@ -102,8 +113,6 @@
 
 	function handleScroll() {
 		if (mode !== 'scroll' || !scrollEl) return;
-
-		// Determine which page is most visible
 		const scrollTop = scrollEl.scrollTop;
 		const viewportH = scrollEl.clientHeight;
 		const center = scrollTop + viewportH / 2;
@@ -118,23 +127,14 @@
 				break;
 			}
 		}
-
-		// Check if scrolled to the very bottom
-		if (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 50) {
-			// Near bottom — could auto-advance
-		}
 	}
 
-	// Sync scrollPage to currentPage for progress saving
 	$effect(() => {
-		if (mode === 'scroll') {
-			currentPage = scrollPage;
-		}
+		if (mode === 'scroll') currentPage = scrollPage;
 	});
 
-	// ── Shared logic ──
+	// ── Save progress ──
 
-	// Save progress on page change (debounced)
 	let saveTimeout: ReturnType<typeof setTimeout>;
 	$effect(() => {
 		clearTimeout(saveTimeout);
@@ -155,6 +155,8 @@
 		}, 500);
 	});
 
+	// ── HUD ──
+
 	function toggleHud() {
 		showHud = !showHud;
 		if (showHud) {
@@ -165,32 +167,154 @@
 		}
 	}
 
-	function handleTapPaged(e: MouseEvent) {
-		if (swiped) { swiped = false; return; }
+	// ── Double-tap zoom ──
+
+	let lastTapTime = 0;
+	let lastTapX = 0;
+	let lastTapY = 0;
+
+	function handleDoubleTap(clientX: number, clientY: number) {
+		if (isZoomed) {
+			resetZoom();
+		} else {
+			scale = 2.5;
+			// Center zoom on tap point
+			const rect = containerEl.getBoundingClientRect();
+			const relX = (clientX - rect.left) / rect.width - 0.5;
+			const relY = (clientY - rect.top) / rect.height - 0.5;
+			panX = -relX * rect.width * (scale - 1);
+			panY = -relY * rect.height * (scale - 1);
+			clampPan();
+		}
+	}
+
+	function clampPan() {
+		if (!containerEl) return;
+		const rect = containerEl.getBoundingClientRect();
+		const maxPanX = Math.max(0, (rect.width * scale - rect.width) / 2);
+		const maxPanY = Math.max(0, (rect.height * scale - rect.height) / 2);
+		panX = Math.max(-maxPanX, Math.min(maxPanX, panX));
+		panY = Math.max(-maxPanY, Math.min(maxPanY, panY));
+	}
+
+	// ── Paged tap/gesture handling ──
+
+	let touchStartX = 0;
+	let touchStartY = 0;
+	let swiped = false;
+	let isPanning = false;
+	let pinching = false;
+	let initialPinchDist = 0;
+	let initialPinchScale = 1;
+
+	function handleTouchStartPaged(e: TouchEvent) {
+		if (e.touches.length === 2) {
+			// Pinch start
+			pinching = true;
+			initialPinchDist = getTouchDist(e.touches);
+			initialPinchScale = scale;
+			e.preventDefault();
+			return;
+		}
+
+		if (e.touches.length !== 1) return;
+		touchStartX = e.touches[0].clientX;
+		touchStartY = e.touches[0].clientY;
+		swiped = false;
+		isPanning = isZoomed;
+	}
+
+	function handleTouchMovePaged(e: TouchEvent) {
+		if (pinching && e.touches.length === 2) {
+			const dist = getTouchDist(e.touches);
+			scale = Math.max(1, Math.min(5, initialPinchScale * (dist / initialPinchDist)));
+			if (scale <= 1.05) resetZoom();
+			e.preventDefault();
+			return;
+		}
+
+		if (isPanning && e.touches.length === 1) {
+			const dx = e.touches[0].clientX - touchStartX;
+			const dy = e.touches[0].clientY - touchStartY;
+			panX += dx;
+			panY += dy;
+			clampPan();
+			touchStartX = e.touches[0].clientX;
+			touchStartY = e.touches[0].clientY;
+			e.preventDefault();
+		}
+	}
+
+	function handleTouchEndPaged(e: TouchEvent) {
+		if (pinching) {
+			pinching = false;
+			if (scale <= 1.05) resetZoom();
+			return;
+		}
+
+		if (isPanning) {
+			isPanning = false;
+			return;
+		}
+
+		if (mode !== 'paged') return;
+		const dx = e.changedTouches[0].clientX - touchStartX;
+		const dy = e.changedTouches[0].clientY - touchStartY;
+
+		if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+			swiped = true;
+			if (dx > 0) nextPage();
+			else prevPage();
+		}
+	}
+
+	function getTouchDist(touches: TouchList): number {
+		const dx = touches[0].clientX - touches[1].clientX;
+		const dy = touches[0].clientY - touches[1].clientY;
+		return Math.sqrt(dx * dx + dy * dy);
+	}
+
+	function handleClickPaged(e: MouseEvent) {
+		if (swiped) {
+			swiped = false;
+			return;
+		}
 		if ((e.target as HTMLElement).closest('[data-hud]')) return;
 
-		const rect = containerEl.getBoundingClientRect();
-		const relX = (e.clientX - rect.left) / rect.width;
+		const now = Date.now();
+		const dist = Math.abs(e.clientX - lastTapX) + Math.abs(e.clientY - lastTapY);
 
-		if (relX < 0.3) {
-			nextPage();
-		} else if (relX > 0.7) {
-			prevPage();
-		} else {
-			toggleHud();
+		if (now - lastTapTime < 300 && dist < 50) {
+			// Double tap
+			handleDoubleTap(e.clientX, e.clientY);
+			lastTapTime = 0;
+			return;
 		}
+
+		lastTapTime = now;
+		lastTapX = e.clientX;
+		lastTapY = e.clientY;
+
+		// If zoomed, don't navigate
+		if (isZoomed) return;
+
+		// Single tap — delay to check for double tap
+		setTimeout(() => {
+			if (lastTapTime !== now) return; // was consumed by double tap
+			const rect = containerEl.getBoundingClientRect();
+			const relX = (e.clientX - rect.left) / rect.width;
+
+			if (relX < 0.3) nextPage();
+			else if (relX > 0.7) prevPage();
+			else toggleHud();
+		}, 300);
 	}
 
 	function handleTapScroll(e: MouseEvent) {
 		if ((e.target as HTMLElement).closest('[data-hud]')) return;
-
 		const rect = scrollEl.getBoundingClientRect();
 		const relX = (e.clientX - rect.left) / rect.width;
-
-		// In scroll mode, center tap toggles HUD
-		if (relX > 0.25 && relX < 0.75) {
-			toggleHud();
-		}
+		if (relX > 0.25 && relX < 0.75) toggleHud();
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
@@ -205,41 +329,16 @@
 					prevPage();
 					break;
 				case 'Escape':
-					if (showHud) showHud = false;
+					if (isZoomed) resetZoom();
+					else if (showHud) showHud = false;
 					else goBack();
 					break;
 			}
 		} else {
-			switch (e.key) {
-				case 'Escape':
-					if (showHud) showHud = false;
-					else goBack();
-					break;
+			if (e.key === 'Escape') {
+				if (showHud) showHud = false;
+				else goBack();
 			}
-		}
-	}
-
-	// Swipe detection (paged only)
-	let touchStartX = 0;
-	let touchStartY = 0;
-	let swiped = false;
-
-	function handleTouchStart(e: TouchEvent) {
-		if (e.touches.length !== 1) return;
-		touchStartX = e.touches[0].clientX;
-		touchStartY = e.touches[0].clientY;
-		swiped = false;
-	}
-
-	function handleTouchEnd(e: TouchEvent) {
-		if (mode !== 'paged') return;
-		const dx = e.changedTouches[0].clientX - touchStartX;
-		const dy = e.changedTouches[0].clientY - touchStartY;
-
-		if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-			swiped = true;
-			if (dx > 0) nextPage();
-			else prevPage();
 		}
 	}
 
@@ -261,13 +360,18 @@
 	<!-- ═══ PAGED MODE ═══ -->
 	<div
 		bind:this={containerEl}
-		class="fixed inset-0 bg-black select-none touch-none"
+		class="fixed inset-0 overflow-hidden bg-black select-none"
+		style="filter: brightness({brightness}%)"
 		role="presentation"
-		onclick={handleTapPaged}
-		ontouchstart={handleTouchStart}
-		ontouchend={handleTouchEnd}
+		onclick={handleClickPaged}
+		ontouchstart={handleTouchStartPaged}
+		ontouchmove={handleTouchMovePaged}
+		ontouchend={handleTouchEndPaged}
 	>
-		<div class="flex h-dvh w-full items-center justify-center">
+		<div
+			class="flex h-dvh w-full items-center justify-center transition-transform duration-100"
+			style="transform: scale({scale}) translate({panX / scale}px, {panY / scale}px)"
+		>
 			{#key currentPage}
 				{#if !imageLoaded}
 					<div class="absolute inset-0 flex items-center justify-center">
@@ -292,22 +396,29 @@
 				{currentPage + 1} / {totalPages}
 			</span>
 		</div>
+
+		<!-- Zoom indicator -->
+		{#if isZoomed}
+			<div class="pointer-events-none fixed right-3 top-3">
+				<span class="rounded-full bg-black/60 px-2 py-1 text-[10px] text-white/40">
+					{Math.round(scale * 100)}%
+				</span>
+			</div>
+		{/if}
 	</div>
 {:else}
 	<!-- ═══ SCROLL MODE ═══ -->
 	<div
 		bind:this={scrollEl}
 		class="fixed inset-0 overflow-y-auto overflow-x-hidden bg-black select-none"
+		style="filter: brightness({brightness}%)"
 		role="presentation"
 		onscroll={handleScroll}
 		onclick={handleTapScroll}
 	>
 		<div class="mx-auto flex max-w-3xl flex-col items-center">
 			{#each pages as pageUrl, i (i)}
-				<div
-					id="page-{i}"
-					class="w-full"
-				>
+				<div id="page-{i}" class="w-full">
 					<img
 						src={pageUrl}
 						alt="Page {i + 1}"
@@ -340,8 +451,8 @@
 			</div>
 		</div>
 
-		<!-- Scroll progress indicator (right edge) -->
-		<div class="pointer-events-none fixed right-1 top-0 bottom-0 flex items-center">
+		<!-- Scroll progress indicator -->
+		<div class="pointer-events-none fixed bottom-0 right-1 top-0 flex items-center">
 			<div class="h-[60%] w-0.5 rounded-full bg-white/10">
 				<div
 					class="w-full rounded-full bg-accent/60 transition-all duration-150"
@@ -359,12 +470,9 @@
 	</div>
 {/if}
 
-<!-- ═══ HUD OVERLAY (shared) ═══ -->
+<!-- ═══ HUD OVERLAY ═══ -->
 {#if showHud}
-	<div
-		data-hud
-		class="fixed inset-0 z-50 pointer-events-none animate-fade-in"
-	>
+	<div data-hud class="pointer-events-none fixed inset-0 z-50 animate-fade-in">
 		<!-- Top bar -->
 		<div class="pointer-events-auto flex items-center gap-3 bg-black/80 px-4 py-3 pt-safe-top backdrop-blur-sm">
 			<button onclick={goBack} class="text-white/80 hover:text-white" aria-label="Go back">
@@ -388,13 +496,11 @@
 				aria-label="Toggle reading mode"
 			>
 				{#if mode === 'paged'}
-					<!-- Scroll icon -->
 					<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<path d="M12 5v14M5 12l7 7 7-7" />
 					</svg>
 					Scroll
 				{:else}
-					<!-- Paged icon -->
 					<svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 						<rect x="3" y="3" width="7" height="18" rx="1" />
 						<rect x="14" y="3" width="7" height="18" rx="1" />
@@ -407,7 +513,6 @@
 		<!-- Bottom bar -->
 		<div class="pointer-events-auto absolute inset-x-0 bottom-0 bg-black/80 px-4 pb-safe-bottom pt-3 backdrop-blur-sm">
 			{#if mode === 'paged'}
-				<!-- Page slider (RTL for manga) -->
 				<div class="flex items-center gap-3">
 					<span class="w-8 text-right text-xs tabular-nums text-white/50">{totalPages}</span>
 					<input
@@ -422,7 +527,6 @@
 					<span class="w-8 text-xs tabular-nums text-white/50">1</span>
 				</div>
 			{:else}
-				<!-- Scroll progress bar -->
 				<div class="flex items-center gap-3">
 					<span class="w-8 text-right text-xs tabular-nums text-white/50">1</span>
 					<input
@@ -441,6 +545,28 @@
 				</div>
 			{/if}
 
+			<!-- Brightness slider -->
+			<div class="mt-2 flex items-center gap-3">
+				<svg class="h-3.5 w-3.5 flex-shrink-0 text-white/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+					<circle cx="12" cy="12" r="5" />
+					<line x1="12" y1="1" x2="12" y2="3" />
+					<line x1="12" y1="21" x2="12" y2="23" />
+					<line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+					<line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+					<line x1="1" y1="12" x2="3" y2="12" />
+					<line x1="21" y1="12" x2="23" y2="12" />
+					<line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+					<line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+				</svg>
+				<input
+					type="range"
+					min="20"
+					max="100"
+					bind:value={brightness}
+					class="slider flex-1"
+				/>
+			</div>
+
 			<!-- Chapter navigation -->
 			<div class="mt-2 flex items-center justify-between pb-2">
 				{#if mode === 'paged'}
@@ -448,23 +574,15 @@
 						<button
 							onclick={() => goto(`/read/${nextChapterId}?manga=${mangaId}`)}
 							class="text-xs text-accent hover:text-accent-hover"
-						>
-							Next Ch.
-						</button>
-					{:else}
-						<span></span>
-					{/if}
+						>Next Ch.</button>
+					{:else}<span></span>{/if}
 				{:else}
 					{#if prevChapterId && mangaId}
 						<button
 							onclick={() => goto(`/read/${prevChapterId}?manga=${mangaId}`)}
 							class="text-xs text-accent hover:text-accent-hover"
-						>
-							Prev Ch.
-						</button>
-					{:else}
-						<span></span>
-					{/if}
+						>Prev Ch.</button>
+					{:else}<span></span>{/if}
 				{/if}
 
 				<span class="text-sm font-medium tabular-nums text-white">
@@ -476,23 +594,15 @@
 						<button
 							onclick={() => goto(`/read/${prevChapterId}?manga=${mangaId}`)}
 							class="text-xs text-accent hover:text-accent-hover"
-						>
-							Prev Ch.
-						</button>
-					{:else}
-						<span></span>
-					{/if}
+						>Prev Ch.</button>
+					{:else}<span></span>{/if}
 				{:else}
 					{#if nextChapterId && mangaId}
 						<button
 							onclick={() => goto(`/read/${nextChapterId}?manga=${mangaId}`)}
 							class="text-xs text-accent hover:text-accent-hover"
-						>
-							Next Ch.
-						</button>
-					{:else}
-						<span></span>
-					{/if}
+						>Next Ch.</button>
+					{:else}<span></span>{/if}
 				{/if}
 			</div>
 		</div>

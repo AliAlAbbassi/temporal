@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { getAllProgress, getLibrary, type LibraryEntry, type ReadingProgress } from '$lib/stores/progress';
+	import { getAllProgress, type ReadingProgress } from '$lib/stores/progress';
 	import MangaGrid from '$lib/components/MangaGrid.svelte';
 	import SearchBar from '$lib/components/SearchBar.svelte';
 
@@ -8,13 +8,11 @@
 	let searchResults = $state<any[]>([]);
 	let isSearching = $state(false);
 	let continueReading = $state<ReadingProgress[]>([]);
-	let library = $state<LibraryEntry[]>([]);
 	let searchTimeout: ReturnType<typeof setTimeout>;
 	let sourceFilter = $state<'all' | 'mangadex' | 'mangapill'>('all');
 
 	$effect(() => {
 		continueReading = getAllProgress();
-		library = getLibrary();
 	});
 
 	async function doSearch(query: string, source: string) {
@@ -59,7 +57,7 @@
 	}
 </script>
 
-<div class="flex min-h-dvh flex-col">
+<div class="flex min-h-dvh flex-col pb-20">
 	<!-- Header -->
 	<header class="sticky top-0 z-30 border-b border-border bg-bg/90 px-4 pb-3 pt-safe-top backdrop-blur-xl">
 		<div class="mx-auto max-w-3xl">
@@ -103,7 +101,7 @@
 						<div class="flex gap-3 overflow-x-auto pb-2 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
 							{#each continueReading.slice(0, 10) as progress}
 								<button
-									onclick={() => goto(`/read/${progress.chapterId}`)}
+									onclick={() => goto(`/read/${progress.chapterId}?manga=${progress.mangaId}`)}
 									class="group flex-shrink-0"
 								>
 									<div class="relative h-36 w-24 overflow-hidden rounded-lg bg-bg-surface">
@@ -132,21 +130,30 @@
 					</section>
 				{/if}
 
-				<!-- Library -->
-				{#if library.length > 0}
-					<section class="mb-8">
-						<h2 class="mb-3 text-sm font-semibold uppercase tracking-wider text-text-secondary">Library</h2>
-						<MangaGrid items={library.map(e => ({ id: e.mangaId, title: e.title, coverUrl: e.coverUrl }))} />
-					</section>
-				{/if}
-
-				<!-- Empty state -->
-				{#if continueReading.length === 0 && library.length === 0}
-					<div class="flex flex-col items-center justify-center py-32 text-center">
-						<div class="mb-4 text-5xl opacity-20">&#x1F4DA;</div>
-						<p class="text-text-secondary">Search for manga to get started</p>
+				<!-- Quick links -->
+				<section>
+					<div class="grid grid-cols-2 gap-3">
+						<button
+							onclick={() => goto('/discover')}
+							class="flex flex-col items-center gap-2 rounded-xl bg-bg-surface p-6 transition-colors hover:bg-bg-hover"
+						>
+							<svg class="h-8 w-8 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<circle cx="12" cy="12" r="10" />
+								<polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor" />
+							</svg>
+							<span class="text-sm text-text-secondary">Discover</span>
+						</button>
+						<button
+							onclick={() => goto('/library')}
+							class="flex flex-col items-center gap-2 rounded-xl bg-bg-surface p-6 transition-colors hover:bg-bg-hover"
+						>
+							<svg class="h-8 w-8 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+								<path d="M5 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16l-7-3.5L5 21V5z" />
+							</svg>
+							<span class="text-sm text-text-secondary">Library</span>
+						</button>
 					</div>
-				{/if}
+				</section>
 			{/if}
 		</div>
 	</main>
